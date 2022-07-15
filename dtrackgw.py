@@ -52,6 +52,8 @@ try:
     ]
     printer = None
     for dev in usb.core.find(find_all=True):
+        if dev.idVendor == 7531:
+            continue
         print(dev.idVendor)
         if dev.idVendor in vendors:
             device = dev
