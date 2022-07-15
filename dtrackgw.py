@@ -68,7 +68,7 @@ try:
                 custom_match=lambda e: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT
             )
             break
-    processar(printer, "^XA^MTd^JUS^XZ")
+    processar(printer, "^XA^MTd^MMP,Y^JUS^XZ")
 
     session = boto3.Session(
         aws_access_key_id=CONFIG['aws_access_key_id'],
