@@ -58,7 +58,7 @@ def setup_printer():
     for dev in usb.core.find(find_all=True):
         if dev.idVendor == 7531:
             continue
-        print(dev.idVendor)
+        # print(dev.idVendor)
         if dev.idVendor in VENDORS:
             device = dev
             device.reset()
@@ -117,7 +117,7 @@ try:
                     except ClientError:
                         pass
         except usb.core.USBError:
-            print('Erro')
+            # print('Erro')
             p = None
             while not p:
                 p = setup_printer()
