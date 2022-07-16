@@ -1,5 +1,7 @@
 import os
 import sys
+import time
+
 import boto3
 import usb.core
 import usb.util
@@ -7,14 +9,23 @@ import json
 
 from botocore.exceptions import ClientError
 
+VENDORS = [
+        2655,
+        8401,
+    ]
+
+
 with open('configgw.json', 'r') as config:
     CONFIG = json.loads(config.read())
 
 
-def processar(p, msg):
-    if not isinstance(msg, bytes):
-        msg = msg.encode('utf-8')
-    p.write(msg, 300000)
+def processar(printer, command):
+    if not isinstance(command, bytes):
+        command = command.encode('utf-8')
+    try:
+        printer.write(command, 300000)
+    except usb.core.USBError:
+        return False
     return True
 
 
@@ -37,25 +48,21 @@ def receive_messages(queue, max_number=10, wait_time=20):
             MaxNumberOfMessages=max_number,
             WaitTimeSeconds=wait_time
         )
-        for msg in messages:
-            yield msg
+        for message in messages:
+            yield message
     except ClientError as error:
         raise error
     else:
         return messages
 
 
-try:
-    vendors = [
-        2655,
-        8401,
-    ]
-    printer = None
+def setup_printer():
+    prt = None
     for dev in usb.core.find(find_all=True):
         if dev.idVendor == 7531:
             continue
         print(dev.idVendor)
-        if dev.idVendor in vendors:
+        if dev.idVendor in VENDORS:
             device = dev
             device.reset()
             if device.is_kernel_driver_active(0):
@@ -63,12 +70,34 @@ try:
             device.set_configuration()
             cfg = device.get_active_configuration()
             intf = cfg[(0, 0)]
-            printer = usb.util.find_descriptor(
+            prt = usb.util.find_descriptor(
                 intf,
                 custom_match=lambda e: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT
             )
             break
-    processar(printer, "^XA^MTd^MMP,Y^JUS^XZ")
+    cmd = '^XA'
+    if CONFIG['direct-termal']:
+        cmd += '^MTd'
+    else:
+        cmd += '^MTd'
+    time.sleep(1)
+    if CONFIG['peel-off']:
+        cmd += '^MMP'
+    else:
+        cmd += '^MMT'
+    cmd += '^JUS^XZ'
+    ok = processar(prt, cmd)
+    if not ok:
+        prt = None
+        time.sleep(5)
+    else:
+        time.sleep(1)
+    return prt
+
+try:
+    p = None
+    while not p:
+        p = setup_printer()
 
     session = boto3.Session(
         aws_access_key_id=CONFIG['aws_access_key_id'],
@@ -78,14 +107,20 @@ try:
     sqs = session.resource('sqs')
     queue = sqs.get_queue_by_name(QueueName=CONFIG['queue'])
     while True:
-        processar(printer, "~HS")
-        for msg in receive_messages(queue):
-            r = processar(printer, msg.body)
-            if bool(r):
-                try:
-                    msg.delete()
-                except ClientError:
-                    pass
+        try:
+            processar(p, "~HS")
+            for msg in receive_messages(queue):
+                r = processar(p, msg.body)
+                if bool(r):
+                    try:
+                        msg.delete()
+                    except ClientError:
+                        pass
+        except usb.core.USBError:
+            p = None
+            while not p:
+                p = setup_printer()
+
 except KeyboardInterrupt:
     print('Interrupted')
     try:
