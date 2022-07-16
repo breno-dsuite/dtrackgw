@@ -22,10 +22,7 @@ with open('configgw.json', 'r') as config:
 def processar(printer, command):
     if not isinstance(command, bytes):
         command = command.encode('utf-8')
-    try:
-        printer.write(command, 300000)
-    except usb.core.USBError:
-        return False
+    printer.write(command, 300000)
     return True
 
 
@@ -120,6 +117,7 @@ try:
                     except ClientError:
                         pass
         except usb.core.USBError:
+            print('Erro')
             p = None
             while not p:
                 p = setup_printer()
