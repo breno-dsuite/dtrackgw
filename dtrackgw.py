@@ -75,6 +75,9 @@ def setup_printer():
                 custom_match=lambda e: usb.util.endpoint_direction(e.bEndpointAddress) == usb.util.ENDPOINT_OUT
             )
             break
+    if not prt:
+        time.sleep(5)
+        return None
     cmd = '^XA'
     if CONFIG['direct-termal']:
         cmd += '^MTd'
