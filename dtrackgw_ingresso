@@ -1,0 +1,166 @@
+import json
+import os
+import sys
+import time
+
+import boto3
+import qrcode
+import requests
+from botocore.exceptions import ClientError
+from escpos import printer
+
+# sudo nano /etc/supervisor/conf.d/cmp_mail.conf
+# [program:cmp_mail]
+# priority=10
+# directory=/home/ubuntu/base
+# environment=SITE_ID="12",PYTHONUNBUFFERED=1
+# command=/home/ubuntu/venv_base38/bin/python /home/ubuntu/base/manage.py processar_codemyparty_mail
+# user=ubuntu
+# autostart=true
+# autorestart=true
+# log_stderr=true
+# log_stdout=true
+# stdout_logfile=/var/log/processar_cmp_mail.log
+# redirect_stderr=true
+
+def processar_item(item):
+    if 'cortar' in item:
+        try:
+            impressora = printer.Network(item['impressora'], timeout=1, profile='TM-T20II')
+            impressora.cut(feed=False)
+            time.sleep(0.5)
+            impressora.close()
+            return True
+        except Exception:
+            time.sleep(5)
+            return True
+    if not item['ingressos']:
+        return True
+    try:
+        impressora = printer.Network(item['impressora'], timeout=1, profile='TM-T20II')
+        impressora.charcode('CP860')
+        impressora.set(align='center')
+        if 'portador_display' in item:
+            impressora.cut(feed=False)
+            impressora.set(bold=True, underline=True, font='a', invert=False)
+            impressora.textln(item['portador_display'].upper())
+            impressora.textln(f"{item['portador_qtd']} CORTESIAS")
+            impressora.textln('')
+            impressora.textln('')
+            impressora.cut(feed=False)
+        for i in item['ingressos']:
+            if not impressora.is_online():
+                print('offline')
+                return True
+            if not impressora.is_usable():
+                print('not usable')
+                return True
+            if impressora.paper_status() == 0:
+                print('sem papel')
+                return True
+            if impressora.paper_status() == 1:
+                print('acabando')
+                impressora.buzzer(5, 1)
+            print(i['id'])
+            impressora.image('evento/logos/nacional380.png')
+            impressora.set(bold=False, underline=False, font='b', invert=False)
+            impressora.textln('')
+            impressora.set(bold=False, underline=False, font='b', invert=False)
+            impressora.textln(i['display_hora'].upper())
+            impressora.set(bold=False, underline=False, font='b', invert=False)
+            impressora.textln(i['local'].upper())
+            # impressora.set(bold=True, underline=True, font='a', invert=False)
+            # impressora.textln(i['titulo1'])
+            # impressora.set(bold=True, underline=True, font='a', invert=False)
+            # impressora.textln(i['titulo2'])
+            qr_code = qrcode.QRCode(
+                version=None, box_size=4, border=1, error_correction=qrcode.constants.ERROR_CORRECT_M
+            )
+            qr_code.add_data(i['url'])
+            qr_code.make(fit=True)
+            qr_img = qr_code.make_image()
+            im = qr_img._img.convert("RGB")
+            impressora.image(im)
+            impressora.set(bold=False, underline=False, font='b', invert=False)
+            impressora.textln('')
+
+            impressora.set(bold=True, underline=True, font='a', invert=False)
+            impressora.textln(i['cortesia'])
+            impressora.set(bold=False, underline=False, font='b', invert=False, )
+            impressora.textln(i['obs'].upper())
+            impressora.set(bold=False, underline=False, font='b', invert=False,)
+            impressora.textln(i['obs1'].upper())
+            impressora.set(bold=False, underline=False, font='b', invert=False, )
+            impressora.textln(i['obs2'].upper())
+            impressora.image('evento/logos/code.png')
+            impressora.text(' \n')
+            impressora.text(' \n')
+            impressora.cut(feed=False)
+            requests.post(f'https://app.codemyparty.com.br/evento/ingresso_impresso/{i["id"]}', timeout=2)
+            time.sleep(0.1)
+        impressora.close()
+        return True
+    except Exception as ex:
+        print(ex)
+        return True
+
+with open('configgw.json', 'r') as config:
+    CONFIG = json.loads(config.read())
+
+session = boto3.Session(
+        aws_access_key_id=CONFIG['aws_access_key_id'],
+        aws_secret_access_key=CONFIG['aws_secret_access_key'],
+        region_name=CONFIG['region_name'],
+    )
+
+sqs = session.resource('sqs')
+# queues = [
+#     sqs.get_queue_by_name(QueueName=f'gw_impressao_1.fifo'),
+# ]
+queue_gw = sqs.get_queue_by_name(
+    QueueName=f'gw_impressao_1.fifo'
+)
+
+def receive_messages(queue, max_number=1, wait_time=5):
+    """
+    Receive a batch of messages in a single request from an SQS queue.
+
+    :param queue: The queue from which to receive messages.
+    :param max_number: The maximum number of messages to receive. The actual number
+                       of messages received might be less.
+    :param wait_time: The maximum time to wait (in seconds) before returning. When
+                      this number is greater than zero, long polling is used. This
+                      can result in reduced costs and fewer false empty responses.
+    :return: The list of Message objects received. These each contain the body
+             of the message and metadata and custom attributes.
+    """
+    try:
+        messages = queue.receive_messages(
+            MessageAttributeNames=['All'],
+            MaxNumberOfMessages=max_number,
+            WaitTimeSeconds=wait_time
+        )
+        for msg in messages:
+            yield msg
+    except ClientError as error:
+        raise error
+    else:
+        return messages
+try:
+    while True:
+        try:
+            for msg in receive_messages(queue_gw, wait_time=20):
+                print(msg.body)
+                r = processar_item(json.loads(msg.body))
+                # DEBUG
+                # r = False if settings.DEBUG else r
+                if bool(r):
+                    msg.delete()
+        except Exception as ex:
+            print(ex)
+except KeyboardInterrupt:
+    print('Interrupted')
+    try:
+        sys.exit(0)
+    except SystemExit:
+        os._exit(0)
